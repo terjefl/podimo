@@ -293,7 +293,11 @@ async def harvest_podcast(client: PodimoClient, config: Config, slug: str):
     placeholder = Path(__file__).parent.parent / "episode_not_available.mp3"
     sem = asyncio.Semaphore(config.api.max_concurrent_downloads)
 
-    download_headers = client.generateHeaders(client.token)
+    download_headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Referer": "https://podimo.com/",
+        "Accept": "audio/webm,audio/ogg,audio/wav,audio/*;q=0.9,application/ogg;q=0.7,video/*;q=0.6,*/*;q=0.5",
+    }
 
     async def download_one(episode: dict, url: str):
         episode_id = episode["id"]
