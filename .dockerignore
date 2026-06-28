@@ -1,5 +1,4 @@
 LICENSE.txt
-README.md
 cache/**/*
 .env
 venv/**/*
