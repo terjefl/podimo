@@ -13,6 +13,7 @@ from rfeed import Feed, Image, Item, Guid, Enclosure, iTunes, iTunesItem
 
 from .client import PodimoClient
 from .config import Config, User
+from .utils import async_wrap
 from .utils import token_key
 
 
@@ -116,12 +117,12 @@ def extract_audio_url(episode: dict) -> tuple[Optional[str], int]:
 
 # --- Download ---
 
-async def _download_file(session: aiohttp.ClientSession, url: str, path: Path, headers: dict = None):
+def _download_file_sync(scraper, url: str, path: Path):
     interim = path.with_name(path.stem + "_interim.mp3")
-    async with session.get(url, headers=headers) as response:
+    with scraper.get(url, stream=True, timeout=(10, 60)) as response:
         response.raise_for_status()
         with interim.open("wb") as f:
-            async for chunk in response.content.iter_chunked(65536):
+            for chunk in response.iter_content(65536):
                 f.write(chunk)
     interim.rename(path)
     print(f"[INFO] Downloaded {path.name}")
@@ -293,19 +294,12 @@ async def harvest_podcast(client: PodimoClient, config: Config, slug: str):
     placeholder = Path(__file__).parent.parent / "episode_not_available.mp3"
     sem = asyncio.Semaphore(config.api.max_concurrent_downloads)
 
-    download_headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "Referer": "https://podimo.com/",
-        "Accept": "audio/webm,audio/ogg,audio/wav,audio/*;q=0.9,application/ogg;q=0.7,video/*;q=0.6,*/*;q=0.5",
-    }
-
     async def download_one(episode: dict, url: str):
         episode_id = episode["id"]
         path = build_podcast_episode_file_path(config, slug, episode_id)
         async with sem:
             try:
-                async with aiohttp.ClientSession() as session:
-                    await _download_file(session, url, path, headers=download_headers)
+                await async_wrap(_download_file_sync)(client.scraper, url, path)
             except Exception as exc:
                 print(f"[WARN] Download failed for {episode_id}: {exc}")
                 if path.exists():
