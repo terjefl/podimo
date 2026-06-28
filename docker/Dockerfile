@@ -14,11 +14,11 @@ RUN curl -sSL https://install.python-poetry.org | python3 - -y --version 1.8.3
 
 RUN /root/.local/bin/poetry config virtualenvs.create false
 
-COPY pyproject.toml poetry.lock README.md ./
+COPY pyproject.toml README.md ./
 
 COPY podimo podimo
 
-RUN /root/.local/bin/poetry install --only main
+RUN /root/.local/bin/poetry lock --no-update && /root/.local/bin/poetry install --only main
 
 COPY docker/episode_not_available.mp3 .
 COPY docker/entrypoint.sh .
