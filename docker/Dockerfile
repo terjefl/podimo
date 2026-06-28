@@ -18,7 +18,7 @@ COPY pyproject.toml README.md ./
 
 COPY podimo podimo
 
-RUN /root/.local/bin/poetry lock --no-update && /root/.local/bin/poetry install --only main
+RUN /root/.local/bin/poetry lock && /root/.local/bin/poetry install --only main
 
 COPY docker/episode_not_available.mp3 .
 COPY docker/entrypoint.sh .
