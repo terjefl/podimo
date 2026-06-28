@@ -116,9 +116,9 @@ def extract_audio_url(episode: dict) -> tuple[Optional[str], int]:
 
 # --- Download ---
 
-async def _download_file(session: aiohttp.ClientSession, url: str, path: Path):
+async def _download_file(session: aiohttp.ClientSession, url: str, path: Path, headers: dict = None):
     interim = path.with_name(path.stem + "_interim.mp3")
-    async with session.get(url) as response:
+    async with session.get(url, headers=headers) as response:
         response.raise_for_status()
         with interim.open("wb") as f:
             async for chunk in response.content.iter_chunked(65536):
@@ -293,13 +293,15 @@ async def harvest_podcast(client: PodimoClient, config: Config, slug: str):
     placeholder = Path(__file__).parent.parent / "episode_not_available.mp3"
     sem = asyncio.Semaphore(config.api.max_concurrent_downloads)
 
+    download_headers = client.generateHeaders(client.token)
+
     async def download_one(episode: dict, url: str):
         episode_id = episode["id"]
         path = build_podcast_episode_file_path(config, slug, episode_id)
         async with sem:
             try:
                 async with aiohttp.ClientSession() as session:
-                    await _download_file(session, url, path)
+                    await _download_file(session, url, path, headers=download_headers)
             except Exception as exc:
                 print(f"[WARN] Download failed for {episode_id}: {exc}")
                 if path.exists():
