@@ -1,0 +1,41 @@
+---
+host: "https://<your-domain-here>"  # Public URL — used to build links in RSS feeds and index
+yield_dir: "yield"                  # Directory for downloaded MP3s and generated RSS feeds
+
+# Access control (choose one, or omit for no auth)
+#
+# Option 1 — single shared secret: all users use ?secret=<value> on all requests
+#secret: "<optional-access-secret>"
+#
+# Option 2 — per-user secrets: each user gets their own secret and private RSS feeds.
+# When users are configured, `secret` above is ignored for auth.
+#users:
+#  - alias: "alice"
+#    secret: "<alice-secret>"
+#  - alias: "bob"
+#    secret: "<bob-secret>"
+
+# Set to true to disable the HTML index page (GET /)
+#disable_index: false
+
+auth:
+  email: "<your-podimo-email>"
+  password: "<your-podimo-password>"
+  region: "no"    # no, nl, de, dk, es, latam, en, mx, fi, uk
+  locale: "no-NO" # no-NO, nl-NL, de-DE, da-DK, es-ES, en-US, es-MX, fi-FI, en-GB
+
+#api:
+#  max_concurrent_downloads: 3     # Max simultaneous episode downloads (default: 3)
+#  token_cache_time: 432000        # Auth token lifetime in seconds (default: 5 days)
+
+podcasts:
+  # Each key is a slug you choose — used in the URL and as the folder name on disk
+  # podcast_id: found in the Podimo URL: podimo.com/shows/<podcast_id>
+  # feed_name: base filename for the RSS XML (default: "feed" → feed.xml / feed-<alias>.xml)
+  # most_recent_episodes_limit: only harvest the N most recent episodes (default: no limit)
+#  min-podcast:
+#    podcast_id: "<uuid-from-podimo-url>"
+#    feed_name: "feed"
+#    most_recent_episodes_limit: 100
+#  annen-podcast:
+#    podcast_id: "<uuid-from-podimo-url>"

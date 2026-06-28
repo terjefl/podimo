@@ -1,0 +1,28 @@
+[tool.poetry]
+name = "podimo"
+version = "0.1.0"
+description = "Download Podimo podcast episodes and serve them as private RSS feeds"
+authors = ["Terje Flågan <terje@flagan.net>"]
+readme = "README.md"
+license = "EUPL-1.2"
+
+[tool.poetry.scripts]
+podimo = "podimo.cli:cli"
+
+[tool.poetry.dependencies]
+python = "^3.11"
+fastapi = "0.115.8"
+uvicorn = "0.34.0"
+typer = "0.15.1"
+asyncer = "^0.0.8"
+dataclass-wizard = {extras = ["yaml"], version = "0.35.0"}
+rfeed = "^1.1.1"
+aiohttp = "^3.9"
+cloudscraper = "^1.2.71"
+
+[tool.poetry.group.dev.dependencies]
+black = "^24.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

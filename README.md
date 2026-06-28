@@ -1,110 +1,188 @@
-<div align="center">
+# Podimo
 
-# Podimo to RSS
+Download Podimo podcast episodes and serve them as private RSS feeds.
 
-Podimo is a proprietary podcasting player that enables you to listen to various exclusive shows behind a paywall.
-This tool allows you to stream Podimo podcasts with your preferred podcast player, without having to use the Podimo app.
-</div>
+> A valid Podimo subscription is required to access premium content.
 
-## Recommended installation for self-hosting
-Make sure you have a recent Python 3 version installed, as this is required for the steps below.
+This is a rebuild of [luca-patrignani/podimo](https://github.com/luca-patrignani/podimo) and [thijsraymakers/podimo](https://github.com/thijsraymakers/podimo) in the style of [pasjonsfrukt](https://github.com/terjefl/pasjonsfrukt): episodes are downloaded and stored locally rather than proxied on-demand, so your feeds keep working even if Podimo removes a show or changes their CDN.
 
-1. Clone this repository and enter the newly created directory
+---
+
+### Docker Compose
+
+The recommended way to run podimo is with Docker Compose.
+
+**`compose.yml`**
+```yaml
+services:
+  podimo:
+    image: ghcr.io/terjefl/podimo:latest
+    container_name: podimo
+    restart: unless-stopped
+    ports:
+      - "8200:8000"
+    environment:
+      - TZ=Europe/Oslo
+    volumes:
+      - /path/to/config.yaml:/app/config.yaml:ro
+      - /path/to/crontab:/etc/cron.d/podimo-crontab:ro
+      - /path/to/podcast/files:/app/yield
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/openapi.json || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+```
+
+The crontab controls when harvesting runs. Example:
+
+```cron
+0 4 * * * root podimo harvest >> /var/log/podimo.log 2>&1
+```
+
+---
+
+### Configuration
+
+Copy [`config.template.yaml`](config.template.yaml) to `config.yaml` and fill in your details.
+
+```yaml
+host: "https://your-domain-here"
+yield_dir: "yield"
+
+auth:
+  email: "your@podimo.com"
+  password: "yourpassword"
+  region: "no"
+  locale: "no-NO"
+
+podcasts:
+  min-podcast:
+    podcast_id: "uuid-from-podimo-url"
+    most_recent_episodes_limit: 100
+```
+
+#### `host`
+
+The public base URL of your instance. Used to build links in RSS feeds and on the index page — must be reachable by your podcast app.
+
+#### `yield_dir`
+
+Directory where downloaded MP3 files and generated RSS feeds are stored. Defaults to `"yield"`.
+
+#### `secret`
+
+Adds a `?secret=<value>` query parameter requirement on all endpoints. All clients share the same secret.
+
+```yaml
+secret: "my-shared-secret"
+```
+
+#### `users`
+
+Per-user secrets for multi-user setups. Each user gets their own private RSS feeds with their secret embedded in episode URLs. MP3 files are not duplicated; the secret is only a URL parameter.
+
+```yaml
+users:
+  - alias: "alice"
+    secret: "alice-secret"
+  - alias: "bob"
+    secret: "bob-secret"
+```
+
+When `users` is configured it takes precedence over `secret`. After adding or changing users, run `podimo sync` to regenerate all feed files.
+
+> **Migrating from `secret` to `users`:** The existing `<feed_name>.xml` files on disk become orphaned — the server now looks for `<feed_name>-<alias>.xml` instead. Run `podimo sync` to generate the new per-user feed files, then remove the old ones manually.
+
+#### `disable_index`
+
+Set to `true` to disable the HTML index page. `GET /` will return 404.
+
+```yaml
+disable_index: true
+```
+
+#### `auth`
+
+Podimo account credentials and region.
+
+```yaml
+auth:
+  email: "your@podimo.com"
+  password: "yourpassword"
+  region: "no"    # no, nl, de, dk, es, latam, en, mx, fi, uk
+  locale: "no-NO" # no-NO, nl-NL, de-DE, da-DK, es-ES, en-US, es-MX, fi-FI, en-GB
+```
+
+#### `api`
+
+```yaml
+api:
+  max_concurrent_downloads: 3   # Max simultaneous episode downloads (default: 3)
+  token_cache_time: 432000      # Auth token lifetime in seconds (default: 5 days)
+```
+
+#### `podcasts`
+
+A map of slugs to per-podcast settings. The slug is chosen by you and used in the URL and as the folder name on disk.
+
+```yaml
+podcasts:
+  my-show:
+    podcast_id: "abc123-..."    # Required — Podimo UUID (see below)
+    feed_name: "feed"           # Base filename for RSS XML (default: "feed")
+    most_recent_episodes_limit: 100  # Only harvest N most recent (default: no limit)
+```
+
+**Finding the `podcast_id`:** Open the podcast on [podimo.com](https://podimo.com) — the UUID at the end of the URL is the `podcast_id`. For example:
+```
+https://podimo.com/shows/abc12345-1234-1234-1234-abcdef123456
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                         this is the podcast_id
+```
+
+`feed_name` only affects the filename on disk — the URL is always `GET /{slug}` regardless.
+- Single-secret / no-auth: `yield/{slug}/{feed_name}.xml`
+- Multi-user: `yield/{slug}/{feed_name}-{alias}.xml` per user
+
+---
+
+### Endpoints
+
+| Endpoint | Description |
+|---|---|
+| `GET /` | HTML index of all configured podcasts |
+| `GET /{slug}` | RSS feed for a podcast |
+| `GET /{slug}/{episode_id}` | Episode audio file |
+
+**With `secret`:** append `?secret=<value>` to all requests.
+
+**With `users`:** append `?secret=<user-secret>` to all requests. The RSS feed contains episode URLs pre-populated with that user's secret, so podcast apps fetch audio correctly without extra configuration.
+
+#### Podcast index page
+
+The index page (`GET /`) lists all configured podcasts as cards with direct links to subscribe in Overcast or Pocket Casts. Feed URLs include the requesting user's secret automatically. Can be disabled with `disable_index: true`.
+
+---
+
+### CLI commands
+
 ```sh
-git clone https://github.com/ThijsRay/podimo
-cd podimo
+podimo harvest [SLUG...]   # Download new episodes from Podimo
+podimo sync [SLUG...]      # Regenerate RSS feed files from downloaded episodes
+podimo serve               # Start the HTTP server
+podimo config              # Print the parsed configuration
 ```
 
-2. Get the latest update and install it as a service with
-```sh
-make update
-make install
-```
+All commands accept `--config-file` / `-c` to specify an alternative config file.
 
-3. Run the program with
-```sh
-make start
-```
+---
 
-4. Visit http://localhost:12104. You should see the site now! If you want to reach it from
-other machines, make sure to edit the configuration with
-```sh
-make config
-```
-A complete list of all configuration options can be found in the [.env.example file](.env.example)
+### Development
 
-## Instructions for self-hosting with Docker
-
-1. Pull the Docker image with
+#### Formatting
 
 ```sh
-docker pull ghcr.io/thijsray/podimo:latest
+poetry run black podimo
 ```
-
-2. Run the Docker image.
-Make sure you set the correct environment variables if you want to configure any variables.
-See [.env.example](.env.example) for a full list
-of configuration options.
-```sh
-docker run --rm \
-    -e PODIMO_BIND_HOST=0.0.0.0:12104 \
-    -p 12104:12104 \
-    -v $(pwd)/cache:/src/cache \
-    ghcr.io/thijsray/podimo:latest
-```
-
-3. Visit http://localhost:12104. You should see the site now!
-
-## Configuration
-A complete list of all configuration options can be found in the [.env.example file](.env.example)
-
-## Bot detection
-Depending on your usage patterns, it might be necessary to bypass Podimo's anti-bot mechanisms.
-This can be done through a Zenrows, ScraperAPI or a generic HTTP proxy.
-
-### Setting up a Zenrows account
-You can create a free trial account for Zenrows
-
-1. Go to [app.zenrows.com/register](https://app.zenrows.com/register) and create a free account
-2. Copy your API key and make sure to add it to the `ZENROWS_API` environment variable
-
-### Setting up a ScraperAPI account
-You can create a free trial account for ScraperAPI
-
-1. Go to [dashboard.scraperapi.com/signup](https://dashboard.scraperapi.com/signup) and create a free account
-2. Copy your API key and make sure to add it to the `SCRAPER_API` environment variable
-
-## Privacy
-The script keeps track of a few things in memory:
-- Your username and password, used to login and to create an access token. This is only used temporarily during a request itself.
-- A cryptographic hash that is calculated based on your username and password.
-- A Podimo access token, which is kept in memory for accessing pages after logging in.
-
-This data is not written to the disk (unless `STORE_TOKENS_ON_DISK` is set to true) and it is _never_ logged.
-
-# License
-```
-Copyright 2022-2023 Thijs Raymakers
-
-Licensed under the EUPL, Version 1.2 or – as soon they
-will be approved by the European Commission - subsequent
-versions of the EUPL (the "Licence");
-You may not use this work except in compliance with the
-Licence.
-You may obtain a copy of the Licence at:
-
-https://joinup.ec.europa.eu/software/page/eupl
-
-Unless required by applicable law or agreed to in
-writing, software distributed under the Licence is
-distributed on an "AS IS" basis,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
-express or implied.
-See the Licence for the specific language governing
-permissions and limitations under the Licence.
-```
-
-# Support
-If you find this tool to be helpful, please consider buying me a coffee! It is greatly appreciated!
-
-<a href="https://www.buymeacoffee.com/thijsr"><img src="https://img.buymeacoffee.com/button-api/?text=Buy me a coffee&emoji=&slug=thijsr&button_colour=BD5FFF&font_colour=ffffff&font_family=Poppins&outline_colour=000000&coffee_colour=FFDD00" /></a>

@@ -1,0 +1,19 @@
+services:
+  podimo:
+    image: ghcr.io/terjefl/podimo:latest
+    container_name: podimo
+    restart: unless-stopped
+    ports:
+      - "8200:8000"
+    environment:
+      - TZ=Europe/Oslo
+    volumes:
+      - /path/to/config.yaml:/app/config.yaml:ro
+      - /path/to/crontab:/etc/cron.d/podimo-crontab:ro
+      - /path/to/podcast/files:/app/yield
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/openapi.json || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
