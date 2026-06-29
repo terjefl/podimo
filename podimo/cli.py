@@ -31,9 +31,12 @@ async def harvest(
     """
     config = config_from_stream(config_stream)
     async with get_podimo_client(config) as client:
-        to_harvest = config.podcasts.keys() if podcast_slugs is None else podcast_slugs
-        for slug in to_harvest:
+        import asyncio
+        slugs = list(config.podcasts.keys()) if podcast_slugs is None else podcast_slugs
+        for i, slug in enumerate(slugs):
             await harvest_podcast(client, config, slug)
+            if i < len(slugs) - 1:
+                await asyncio.sleep(2)
 
 
 @cli.command("sync")
