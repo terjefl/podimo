@@ -27,6 +27,7 @@ auth:
 #api:
 #  max_concurrent_downloads: 3     # Max simultaneous episode downloads (default: 3)
 #  token_cache_time: 432000        # Auth token lifetime in seconds (default: 5 days)
+#  inter_podcast_delay: 10         # Seconds to wait between podcasts during harvest (default: 10)
 
 podcasts:
   # Each key is a slug you choose — used in the URL and as the folder name on disk
