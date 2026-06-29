@@ -36,7 +36,7 @@ async def harvest(
         for i, slug in enumerate(slugs):
             await harvest_podcast(client, config, slug)
             if i < len(slugs) - 1:
-                await asyncio.sleep(2)
+                await asyncio.sleep(5)
 
 
 @cli.command("sync")

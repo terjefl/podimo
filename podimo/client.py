@@ -1,3 +1,4 @@
+import asyncio
 import logging
 
 from podimo.utils import randomFlyerId, generateHeaders as gHdrs, async_wrap
@@ -18,20 +19,27 @@ class PodimoClient:
         return gHdrs(authorization, self.locale)
 
     async def post(self, headers, query, variables):
-        response = await async_wrap(self.scraper.post)(
-            GRAPHQL_URL,
-            headers=headers,
-            json={"query": query, "variables": variables},
-            timeout=(6.05, 30),
-        )
-        if response is None:
-            raise RuntimeError(f"No response for query: {query.strip()[:40]}...")
-        if response.status_code != 200:
-            raise RuntimeError(f"Podimo returned {response.status_code} for query: {query.strip()[:40]}...")
-        result = response.json().get("data")
-        if result is None:
-            raise RuntimeError(f"Podimo returned no data for query: {query.strip()[:40]}")
-        return result
+        for attempt in range(5):
+            response = await async_wrap(self.scraper.post)(
+                GRAPHQL_URL,
+                headers=headers,
+                json={"query": query, "variables": variables},
+                timeout=(6.05, 30),
+            )
+            if response is None:
+                raise RuntimeError(f"No response for query: {query.strip()[:40]}...")
+            if response.status_code == 429:
+                wait = 10 * (attempt + 1)
+                logging.warning(f"Podimo rate limited (429), retrying in {wait}s...")
+                await asyncio.sleep(wait)
+                continue
+            if response.status_code != 200:
+                raise RuntimeError(f"Podimo returned {response.status_code} for query: {query.strip()[:40]}...")
+            result = response.json().get("data")
+            if result is None:
+                raise RuntimeError(f"Podimo returned no data for query: {query.strip()[:40]}")
+            return result
+        raise RuntimeError(f"Podimo rate limited after 5 attempts: {query.strip()[:40]}...")
 
     async def getPreregisterToken(self):
         headers = self.generateHeaders(None)
