@@ -3,3 +3,4 @@ venv
 cache
 .env
 .block-list
+.DS_Store
