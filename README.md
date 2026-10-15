@@ -35,11 +35,15 @@ services:
       start_period: 15s
 ```
 
-The crontab controls when harvesting runs. Example:
+The crontab controls when harvesting runs. It is installed with `crontab` inside the container, so use the user-crontab format (no user column). Example:
 
 ```cron
-0 4 * * * root podimo harvest >> /var/log/podimo.log 2>&1
+0 */4 * * * podimo harvest >> /var/log/podimo.log 2>&1
 ```
+
+The image sets `PODIMO_CONFIG_FILE=/app/config.yaml`, so `podimo` finds the config regardless of the working directory cron starts from. Outside Docker, either run from the directory containing `config.yaml`, pass `--config-file`, or set `PODIMO_CONFIG_FILE`.
+
+Podimo serves most of its own episodes as HLS streams (`.m3u8`) rather than MP3 files. These are fetched with `ffmpeg` (bundled in the image) and transcoded to MP3, so `ffmpeg` must be on `PATH` when running outside Docker.
 
 ---
 
@@ -121,6 +125,8 @@ auth:
 api:
   max_concurrent_downloads: 3   # Max simultaneous episode downloads (default: 3)
   token_cache_time: 432000      # Auth token lifetime in seconds (default: 5 days)
+  inter_podcast_delay: 10       # Seconds to wait between podcasts during harvest (default: 10)
+  mp3_bitrate: "128k"           # MP3 bitrate used when transcoding HLS streams (default: 128k)
 ```
 
 #### `podcasts`
@@ -175,7 +181,9 @@ podimo serve               # Start the HTTP server
 podimo config              # Print the parsed configuration
 ```
 
-All commands accept `--config-file` / `-c` to specify an alternative config file.
+All commands accept `--config-file` / `-c` to specify an alternative config file (default: `$PODIMO_CONFIG_FILE`, else `config.yaml`).
+
+`podimo harvest` continues with the next podcast if one fails, and exits with status 1 at the end if any podcast failed. All log lines are prefixed with a timestamp.
 
 ---
 

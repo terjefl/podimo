@@ -1,6 +1,6 @@
 FROM python:3.11-bookworm
 
-RUN apt-get update && apt-get -y install cron && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get -y install cron ffmpeg && rm -rf /var/lib/apt/lists/*
 
 # Set local timezone (for cron)
 RUN ln -sf /usr/share/zoneinfo/Europe/Oslo /etc/localtime
@@ -9,6 +9,9 @@ RUN ln -sf /usr/share/zoneinfo/Europe/Oslo /etc/localtime
 RUN touch /var/log/podimo.log
 
 WORKDIR /app
+
+# Lets `podimo` find the config regardless of the working directory (cron runs from $HOME)
+ENV PODIMO_CONFIG_FILE=/app/config.yaml
 
 RUN curl -sSL https://install.python-poetry.org | python3 - -y --version 1.8.3
 

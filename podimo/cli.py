@@ -1,4 +1,5 @@
 import logging
+import os
 import pprint
 from typing import Optional, Annotated
 
@@ -10,7 +11,9 @@ from .api import api as api_app, api_config
 from .async_cli import AsyncTyper
 from .config import config_from_stream
 from .logging_utils import LogRedactSecretFilter
-from .main import get_podimo_client, harvest_podcast, sync_slug_feed
+from .main import get_podimo_client, harvest_podcast, log, sync_slug_feed
+
+DEFAULT_CONFIG_FILE = os.environ.get("PODIMO_CONFIG_FILE", "config.yaml")
 
 cli = AsyncTyper()
 
@@ -24,19 +27,34 @@ async def harvest(
     config_stream: Annotated[
         Optional[typer.FileText],
         typer.Option("--config-file", "-c", encoding="utf-8", help="Configuration file"),
-    ] = "config.yaml",
+    ] = DEFAULT_CONFIG_FILE,
 ):
     """
     Download podcast episodes from Podimo
     """
+    import asyncio
+
     config = config_from_stream(config_stream)
-    async with get_podimo_client(config) as client:
-        import asyncio
-        slugs = list(config.podcasts.keys()) if podcast_slugs is None else podcast_slugs
-        for i, slug in enumerate(slugs):
-            await harvest_podcast(client, config, slug)
-            if i < len(slugs) - 1:
-                await asyncio.sleep(config.api.inter_podcast_delay)
+    log("[INFO] Harvest started")
+    failed = []
+    try:
+        async with get_podimo_client(config) as client:
+            slugs = list(config.podcasts.keys()) if podcast_slugs is None else podcast_slugs
+            for i, slug in enumerate(slugs):
+                try:
+                    await harvest_podcast(client, config, slug)
+                except Exception as exc:
+                    log(f"[FAIL] Harvest of '{slug}' failed: {exc}")
+                    failed.append(slug)
+                if i < len(slugs) - 1:
+                    await asyncio.sleep(config.api.inter_podcast_delay)
+    except Exception as exc:
+        log(f"[FAIL] Harvest aborted: {exc}")
+        raise typer.Exit(code=1)
+    if failed:
+        log(f"[WARN] Harvest finished with {len(failed)} failed podcast{'s' if len(failed) != 1 else ''}: {', '.join(failed)}")
+        raise typer.Exit(code=1)
+    log("[INFO] Harvest finished")
 
 
 @cli.command("sync")
@@ -48,7 +66,7 @@ async def sync_feeds(
     config_stream: Annotated[
         Optional[typer.FileText],
         typer.Option("--config-file", "-c", encoding="utf-8", help="Configuration file"),
-    ] = "config.yaml",
+    ] = DEFAULT_CONFIG_FILE,
 ):
     """
     Regenerate RSS feeds from downloaded episodes
@@ -57,7 +75,10 @@ async def sync_feeds(
     async with get_podimo_client(config) as client:
         to_sync = config.podcasts.keys() if podcast_slugs is None else podcast_slugs
         for slug in to_sync:
-            await sync_slug_feed(client, config, slug)
+            try:
+                await sync_slug_feed(client, config, slug)
+            except Exception as exc:
+                log(f"[FAIL] Sync of '{slug}' failed: {exc}")
 
 
 @cli.command(
@@ -69,7 +90,7 @@ def serve_api(
     config_stream: Annotated[
         Optional[typer.FileText],
         typer.Option("--config-file", "-c", encoding="utf-8", help="Configuration file"),
-    ] = "config.yaml",
+    ] = DEFAULT_CONFIG_FILE,
 ):
     """
     Serve RSS feeds and episode audio files
@@ -98,7 +119,7 @@ def print_config(
     config_stream: Annotated[
         Optional[typer.FileText],
         typer.Option("--config-file", "-c", encoding="utf-8", help="Configuration file"),
-    ] = "config.yaml",
+    ] = DEFAULT_CONFIG_FILE,
 ):
     """
     Print the parsed configuration

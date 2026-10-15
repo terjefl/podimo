@@ -25,6 +25,7 @@ class ApiConfig:
     max_concurrent_downloads: int = 3
     token_cache_time: int = 432000  # 5 days in seconds
     inter_podcast_delay: int = 10  # seconds between podcast fetches
+    mp3_bitrate: str = "128k"  # MP3 bitrate when transcoding HLS streams with ffmpeg
 
 
 @dataclass

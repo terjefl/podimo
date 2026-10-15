@@ -2,6 +2,7 @@ import asyncio
 import contextlib
 import json
 import shutil
+import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 from time import time
@@ -15,6 +16,10 @@ from .client import PodimoClient
 from .config import Config, User
 from .utils import async_wrap
 from .utils import token_key
+
+
+def log(msg: str):
+    print(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} {msg}", flush=True)
 
 
 # --- Token cache (JSON files in yield_dir/.tokens/) ---
@@ -59,10 +64,10 @@ async def get_podimo_client(config: Config):
     client.scraper = cloudscraper.create_scraper()
     client.token = load_cached_token(key, config)
     if not client.token:
-        print("[INFO] Authenticating with Podimo...")
+        log("[INFO] Authenticating with Podimo...")
         await client.podimoLogin()
         save_token(key, client.token, config)
-        print("[INFO] Authentication successful, token cached")
+        log("[INFO] Authentication successful, token cached")
     yield client
 
 
@@ -110,22 +115,43 @@ def extract_audio_url(episode: dict) -> tuple[Optional[str], int]:
     if not url and episode.get("streamMedia"):
         url = episode["streamMedia"].get("url")
         duration = episode["streamMedia"].get("duration", 0) or 0
-        if url and "hls-media" in url and "/main.m3u8" in url:
-            url = url.replace("hls-media", "audios").replace("/main.m3u8", ".mp3")
     return url, duration
+
+
+def is_hls_url(url: str) -> bool:
+    return url.split("?", 1)[0].lower().endswith(".m3u8")
 
 
 # --- Download ---
 
-def _download_file_sync(scraper, url: str, path: Path):
+def _download_hls_sync(url: str, interim: Path, bitrate: str):
+    """Fetch an HLS stream with ffmpeg and transcode the audio track to MP3."""
+    cmd = [
+        "ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
+        "-user_agent", "Mozilla/5.0",
+        "-i", url,
+        "-vn", "-codec:a", "libmp3lame", "-b:a", bitrate,
+        str(interim),
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
+    if result.returncode != 0:
+        raise RuntimeError(f"ffmpeg exited {result.returncode}: {result.stderr.strip()[-500:]}")
+    if not interim.exists() or interim.stat().st_size == 0:
+        raise RuntimeError("ffmpeg produced no output")
+
+
+def _download_file_sync(scraper, url: str, path: Path, mp3_bitrate: str = "128k"):
     interim = path.with_name(path.stem + "_interim.mp3")
-    with scraper.get(url, stream=True, timeout=(10, 60)) as response:
-        response.raise_for_status()
-        with interim.open("wb") as f:
-            for chunk in response.iter_content(65536):
-                f.write(chunk)
+    if is_hls_url(url):
+        _download_hls_sync(url, interim, mp3_bitrate)
+    else:
+        with scraper.get(url, stream=True, timeout=(10, 60)) as response:
+            response.raise_for_status()
+            with interim.open("wb") as f:
+                for chunk in response.iter_content(65536):
+                    f.write(chunk)
     interim.rename(path)
-    print(f"[INFO] Downloaded {path.name}")
+    log(f"[INFO] Downloaded {path.name}")
 
 
 # --- Feed builder ---
@@ -200,9 +226,9 @@ def build_feed(
 
 async def sync_slug_feed(client: PodimoClient, config: Config, slug: str):
     if slug not in config.podcasts:
-        print(f"[FAIL] The slug '{slug}' did not match any podcasts in the config file")
+        log(f"[FAIL] The slug '{slug}' did not match any podcasts in the config file")
         return
-    print(f"[INFO] Syncing '{slug}' feed...")
+    log(f"[INFO] Syncing '{slug}' feed...")
     podcast_config = config.podcasts[slug]
     data = await client.getPodcasts(podcast_config.podcast_id)
     all_episodes = data["episodes"]
@@ -229,7 +255,7 @@ async def sync_slug_feed(client: PodimoClient, config: Config, slug: str):
             )
             with build_podcast_feed_path(config, slug, alias=user.alias).open("w", encoding="utf-8") as f:
                 f.write(feed)
-        print(
+        log(
             f"[INFO] '{slug}' feed written for {len(config.users)} user{'s' if len(config.users) != 1 else ''}"
             f" ({len(episodes)} episode{'s' if len(episodes) != 1 else ''})"
         )
@@ -240,18 +266,18 @@ async def sync_slug_feed(client: PodimoClient, config: Config, slug: str):
         )
         with build_podcast_feed_path(config, slug).open("w", encoding="utf-8") as f:
             f.write(feed)
-        print(f"[INFO] '{slug}' feed now serving {len(episodes)} episode{'s' if len(episodes) != 1 else ''}")
+        log(f"[INFO] '{slug}' feed now serving {len(episodes)} episode{'s' if len(episodes) != 1 else ''}")
 
 
 # --- Harvest ---
 
 async def harvest_podcast(client: PodimoClient, config: Config, slug: str):
     if slug not in config.podcasts:
-        print(f"[FAIL] The slug '{slug}' did not match any podcasts in the config file")
+        log(f"[FAIL] The slug '{slug}' did not match any podcasts in the config file")
         return
 
     podcast_config = config.podcasts[slug]
-    print(f"[INFO] Fetching episode list for '{slug}'...")
+    log(f"[INFO] Fetching episode list for '{slug}'...")
     data = await client.getPodcasts(
         podcast_config.podcast_id,
         limit=podcast_config.most_recent_episodes_limit,
@@ -259,7 +285,7 @@ async def harvest_podcast(client: PodimoClient, config: Config, slug: str):
     all_episodes = data["episodes"]
 
     if not all_episodes:
-        print(f"[WARN] No published episodes found for '{slug}'")
+        log(f"[WARN] No published episodes found for '{slug}'")
         return
 
     existing_ids = set(harvested_episode_ids(config, slug))
@@ -275,11 +301,11 @@ async def harvest_podcast(client: PodimoClient, config: Config, slug: str):
     limit_note = f" (only looking at {limit} most recent)" if limit is not None else ""
 
     if not to_harvest:
-        print(f"[INFO] Nothing new from '{slug}', all available episodes already harvested{limit_note}")
+        log(f"[INFO] Nothing new from '{slug}', all available episodes already harvested{limit_note}")
         await sync_slug_feed(client, config, slug)
         return
 
-    print(
+    log(
         f"[INFO] Found {len(to_harvest)} new episode{'s' if len(to_harvest) != 1 else ''}"
         f" of '{slug}' ready to harvest{limit_note}"
     )
@@ -288,7 +314,7 @@ async def harvest_podcast(client: PodimoClient, config: Config, slug: str):
     podcast_dir.mkdir(parents=True, exist_ok=True)
 
     for f in podcast_dir.glob("*_interim.mp3"):
-        print(f"[INFO] Removing stale interim file: {f.name}")
+        log(f"[INFO] Removing stale interim file: {f.name}")
         f.unlink()
 
     placeholder = Path(__file__).parent.parent / "episode_not_available.mp3"
@@ -299,15 +325,18 @@ async def harvest_podcast(client: PodimoClient, config: Config, slug: str):
         path = build_podcast_episode_file_path(config, slug, episode_id)
         async with sem:
             try:
-                await async_wrap(_download_file_sync)(client.scraper, url, path)
+                await async_wrap(_download_file_sync)(client.scraper, url, path, config.api.mp3_bitrate)
             except Exception as exc:
-                print(f"[WARN] Download failed for {episode_id}: {exc}")
+                log(f"[WARN] Download failed for {episode_id}: {exc}")
+                interim = path.with_name(path.stem + "_interim.mp3")
+                if interim.exists():
+                    interim.unlink()
                 if path.exists():
                     path.unlink()
                 if placeholder.exists():
                     shutil.copy2(placeholder, path)
                     path.with_suffix(".unavailable").touch()
-                    print(f"[INFO] Placed unavailable-episode placeholder at {path.name}")
+                    log(f"[INFO] Placed unavailable-episode placeholder at {path.name}")
 
     await asyncio.gather(*[download_one(e, url) for e, url in to_harvest])
     await sync_slug_feed(client, config, slug)
