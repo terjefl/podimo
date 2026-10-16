@@ -1,18 +1,20 @@
 import hmac
 import html
+from datetime import datetime, timezone
 import xml.etree.ElementTree as ET
 from functools import lru_cache
 from typing import Optional
 from urllib.parse import quote
 
 from fastapi import FastAPI, HTTPException, Depends
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
 from .config import Config, User
 from .main import (
     build_podcast_feed_path,
     build_podcast_episode_file_path,
     get_secret_query_parameter,
+    read_harvest_status,
 )
 
 api = FastAPI()
@@ -171,6 +173,56 @@ function toggleDesc(uid) {{
 </html>"""
 
     return HTMLResponse(content=page)
+
+
+@api.get("/health")
+async def get_health(config: Config = Depends(api_config)):
+    """
+    Unauthenticated health check for monitoring (e.g. Uptime Kuma).
+
+    Returns 200 when the server is up, every configured podcast has a feed file
+    and the last full harvest finished recently without failures; otherwise 503
+    with the reason in the body. Never includes secrets or episode data.
+    """
+    problems = []
+    now = datetime.now(timezone.utc)
+
+    status = read_harvest_status(config)
+    last_harvest = None
+    harvest_age = None
+    if status is None:
+        problems.append("no harvest has completed yet")
+    else:
+        try:
+            last_harvest = datetime.fromisoformat(status["finished"])
+            harvest_age = int((now - last_harvest).total_seconds())
+            if harvest_age > config.api.health_max_harvest_age:
+                problems.append(f"last harvest is {harvest_age // 3600}h old")
+        except (KeyError, ValueError):
+            problems.append("harvest status file is unreadable")
+        if status.get("error"):
+            problems.append(f"last harvest aborted: {status['error']}")
+        if status.get("failed"):
+            problems.append(f"podcasts failed in last harvest: {', '.join(status['failed'])}")
+
+    aliases = [u.alias for u in config.users] or [None]
+    missing_feeds = [
+        slug
+        for slug in config.podcasts
+        if not all(build_podcast_feed_path(config, slug, alias=a).is_file() for a in aliases)
+    ]
+    if missing_feeds:
+        problems.append(f"feeds missing for: {', '.join(missing_feeds)}")
+
+    body = {
+        "status": "ok" if not problems else "error",
+        "problems": problems,
+        "podcasts": len(config.podcasts),
+        "last_harvest": status["finished"] if status and "finished" in status else None,
+        "last_harvest_age_seconds": harvest_age,
+        "last_harvest_duration_seconds": status.get("duration_seconds") if status else None,
+    }
+    return JSONResponse(body, status_code=200 if not problems else 503)
 
 
 @api.get("/{slug}")

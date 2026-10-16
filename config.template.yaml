@@ -29,6 +29,7 @@ auth:
 #  token_cache_time: 432000        # Auth token lifetime in seconds (default: 5 days)
 #  inter_podcast_delay: 10         # Seconds to wait between podcasts during harvest (default: 10)
 #  mp3_bitrate: "128k"             # MP3 bitrate when transcoding HLS streams with ffmpeg (default: 128k)
+#  health_max_harvest_age: 28800   # GET /health returns 503 if last harvest is older than this, seconds (default: 8h)
 
 podcasts:
   # Each key is a slug you choose — used in the URL and as the folder name on disk

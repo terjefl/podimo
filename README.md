@@ -127,6 +127,7 @@ api:
   token_cache_time: 432000      # Auth token lifetime in seconds (default: 5 days)
   inter_podcast_delay: 10       # Seconds to wait between podcasts during harvest (default: 10)
   mp3_bitrate: "128k"           # MP3 bitrate used when transcoding HLS streams (default: 128k)
+  health_max_harvest_age: 28800 # /health returns 503 if the last harvest is older than this, in seconds (default: 8h)
 ```
 
 #### `podcasts`
@@ -161,10 +162,17 @@ https://podimo.com/shows/abc12345-1234-1234-1234-abcdef123456
 | `GET /` | HTML index of all configured podcasts |
 | `GET /{slug}` | RSS feed for a podcast |
 | `GET /{slug}/{episode_id}` | Episode audio file |
+| `GET /health` | Unauthenticated health check (JSON), 200 or 503 |
 
 **With `secret`:** append `?secret=<value>` to all requests.
 
 **With `users`:** append `?secret=<user-secret>` to all requests. The RSS feed contains episode URLs pre-populated with that user's secret, so podcast apps fetch audio correctly without extra configuration.
+
+#### Health check
+
+`GET /health` needs no secret and is meant for monitoring tools such as Uptime Kuma. It returns `200` with `{"status": "ok", ...}` when the server is up, every podcast has its feed file(s), and the last full `podimo harvest` finished within `api.health_max_harvest_age` seconds (default 8 hours, i.e. two missed 4-hourly cron runs) without any failed podcast. Otherwise it returns `503` with the reasons listed in `problems`. The response also carries `last_harvest`, `last_harvest_age_seconds` and `last_harvest_duration_seconds`, and never includes secrets.
+
+The harvest status is written to `<yield_dir>/.harvest-status.json` at the end of every full harvest (runs limited to specific slugs do not update it).
 
 #### Podcast index page
 

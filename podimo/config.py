@@ -27,6 +27,7 @@ class ApiConfig:
     token_cache_time: int = 432000  # 5 days in seconds
     inter_podcast_delay: int = 10  # seconds between podcast fetches
     mp3_bitrate: str = "128k"  # MP3 bitrate when transcoding HLS streams with ffmpeg
+    health_max_harvest_age: int = 28800  # /health reports 503 if the last harvest is older than this (8h)
 
 
 @dataclass

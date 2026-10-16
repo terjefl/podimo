@@ -4,6 +4,7 @@ import logging
 import os
 import pprint
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Annotated
 
@@ -15,7 +16,7 @@ from .api import api as api_app, api_config
 from .async_cli import AsyncTyper
 from .config import config_from_stream
 from .logging_utils import LogRedactSecretFilter
-from .main import get_podimo_client, harvest_podcast, log, sync_slug_feed
+from .main import get_podimo_client, harvest_podcast, log, sync_slug_feed, write_harvest_status
 
 DEFAULT_CONFIG_FILE = os.environ.get("PODIMO_CONFIG_FILE", "config.yaml")
 
@@ -55,6 +56,7 @@ async def harvest(
         raise typer.Exit(code=0)
 
     log("[INFO] Harvest started")
+    started = datetime.now(timezone.utc)
     failed = []
     try:
         async with get_podimo_client(config) as client:
@@ -69,7 +71,12 @@ async def harvest(
                     await asyncio.sleep(config.api.inter_podcast_delay)
     except Exception as exc:
         log(f"[FAIL] Harvest aborted: {exc}")
+        if podcast_slugs is None:
+            write_harvest_status(config, started, failed, error=str(exc))
         raise typer.Exit(code=1)
+    # Only a full run (all podcasts) counts as "the last harvest" for /health.
+    if podcast_slugs is None:
+        write_harvest_status(config, started, failed)
     if failed:
         log(f"[WARN] Harvest finished with {len(failed)} failed podcast{'s' if len(failed) != 1 else ''}: {', '.join(failed)}")
         raise typer.Exit(code=1)

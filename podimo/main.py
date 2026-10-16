@@ -71,6 +71,33 @@ async def get_podimo_client(config: Config):
     yield client
 
 
+# --- Harvest status (read by GET /health) ---
+
+def harvest_status_path(config: Config) -> Path:
+    return Path(config.yield_dir) / ".harvest-status.json"
+
+
+def write_harvest_status(config: Config, started: datetime, failed: list[str], error: Optional[str] = None):
+    finished = datetime.now(timezone.utc)
+    status = {
+        "started": started.isoformat(timespec="seconds"),
+        "finished": finished.isoformat(timespec="seconds"),
+        "duration_seconds": int((finished - started).total_seconds()),
+        "failed": failed,
+        "error": error,
+    }
+    path = harvest_status_path(config)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(status, indent=2))
+
+
+def read_harvest_status(config: Config) -> Optional[dict]:
+    try:
+        return json.loads(harvest_status_path(config).read_text())
+    except (FileNotFoundError, ValueError):
+        return None
+
+
 # --- Path helpers ---
 
 def build_podcast_dir(config: Config, slug: str) -> Path:
