@@ -1,3 +1,4 @@
+import os
 from dataclasses import dataclass, field
 from io import TextIOWrapper
 from typing import Optional
@@ -52,4 +53,11 @@ class Config(YAMLWizard):
 
 
 def config_from_stream(stream: TextIOWrapper) -> Config:
-    return Config.from_yaml(stream)
+    config = Config.from_yaml(stream)
+    # A relative yield_dir is resolved against the config file's directory, not the
+    # current working directory, so cron jobs and `podimo -c path/config.yaml` behave
+    # the same wherever they are started from.
+    config_path = getattr(stream, "name", None)
+    if isinstance(config_path, str) and not os.path.isabs(config.yield_dir):
+        config.yield_dir = os.path.join(os.path.dirname(os.path.abspath(config_path)), config.yield_dir)
+    return config

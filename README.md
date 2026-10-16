@@ -73,7 +73,7 @@ The public base URL of your instance. Used to build links in RSS feeds and on th
 
 #### `yield_dir`
 
-Directory where downloaded MP3 files and generated RSS feeds are stored. Defaults to `"yield"`.
+Directory where downloaded MP3 files and generated RSS feeds are stored. Defaults to `"yield"`. A relative path is resolved against the directory containing the config file.
 
 #### `secret`
 
