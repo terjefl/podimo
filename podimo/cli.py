@@ -1,7 +1,9 @@
 import fcntl
+import hashlib
 import logging
 import os
 import pprint
+import tempfile
 from pathlib import Path
 from typing import Optional, Annotated
 
@@ -17,7 +19,8 @@ from .main import get_podimo_client, harvest_podcast, log, sync_slug_feed
 
 DEFAULT_CONFIG_FILE = os.environ.get("PODIMO_CONFIG_FILE", "config.yaml")
 
-cli = AsyncTyper()
+# Never dump local variables (they include the parsed config with credentials) into tracebacks.
+cli = AsyncTyper(pretty_exceptions_show_locals=False)
 
 
 @cli.command()
@@ -40,13 +43,14 @@ async def harvest(
 
     # Harvests can take hours when there is a backlog; make sure two scheduled
     # runs never overlap (they would download the same episodes and remove each
-    # other's interim files).
-    lock_path = Path(config.yield_dir) / ".harvest.lock"
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    # other's interim files). The lock lives on the local filesystem, not in
+    # yield_dir, because network shares (CIFS/NFS) handle flock unreliably.
+    lock_name = hashlib.sha256(os.path.abspath(config.yield_dir).encode()).hexdigest()[:16]
+    lock_path = Path(tempfile.gettempdir()) / f"podimo-harvest-{lock_name}.lock"
     lock_file = lock_path.open("w")
     try:
         fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
+    except (BlockingIOError, PermissionError):
         log("[WARN] Another harvest is already running, skipping this run")
         raise typer.Exit(code=0)
 
