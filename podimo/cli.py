@@ -1,6 +1,8 @@
+import fcntl
 import logging
 import os
 import pprint
+from pathlib import Path
 from typing import Optional, Annotated
 
 import typer
@@ -35,6 +37,19 @@ async def harvest(
     import asyncio
 
     config = config_from_stream(config_stream)
+
+    # Harvests can take hours when there is a backlog; make sure two scheduled
+    # runs never overlap (they would download the same episodes and remove each
+    # other's interim files).
+    lock_path = Path(config.yield_dir) / ".harvest.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_file = lock_path.open("w")
+    try:
+        fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        log("[WARN] Another harvest is already running, skipping this run")
+        raise typer.Exit(code=0)
+
     log("[INFO] Harvest started")
     failed = []
     try:
