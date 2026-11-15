@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 from typer.testing import CliRunner
 
 from podimo import cli
+from podimo import api as api_module
 from podimo.api import api, api_config
 from podimo.config import ApiConfig, Auth, Config, Podcast
 from podimo.main import build_podcast_feed_path, harvest_status_path, write_harvest_status
@@ -30,11 +31,23 @@ def config(tmp_path):
     return cfg
 
 
+@pytest.fixture(autouse=True)
+def fresh_status_cache(monkeypatch):
+    monkeypatch.setattr(api_module, "_status_cache", None)
+    monkeypatch.setattr(api_module, "_status_pending", None)
+
+
 @pytest.fixture
 def health(config):
+    """The deep check (GET /status), which carries the harvest semantics that /health used to have."""
     api.dependency_overrides[api_config] = lambda: config
     client = TestClient(api)
-    yield lambda: client.get("/health")
+
+    def get():
+        api_module._status_cache = None  # every call in these tests is a fresh lookup
+        return client.get("/status")
+
+    yield get
     api.dependency_overrides.clear()
 
 

@@ -28,7 +28,7 @@ services:
       - /path/to/crontab:/etc/cron.d/podimo-crontab:ro
       - /path/to/podcast/files:/app/yield
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8000/openapi.json || exit 1"]
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -128,7 +128,7 @@ api:
   inter_podcast_delay: 10       # Seconds to wait between podcasts during harvest (default: 10)
   harvest_retry_delay: 30       # Seconds before the one retry of a podcast whose harvest failed (default: 30)
   mp3_bitrate: "128k"           # MP3 bitrate used when transcoding HLS streams (default: 128k)
-  health_max_harvest_age: 28800 # /health returns 503 if the last harvest is older than this, in seconds (default: 8h)
+  health_max_harvest_age: 28800 # /status returns 503 if the last harvest is older than this, in seconds (default: 8h)
 ```
 
 #### `podcasts`
@@ -163,7 +163,8 @@ https://podimo.com/shows/abc12345-1234-1234-1234-abcdef123456
 | `GET /` | HTML index of all configured podcasts |
 | `GET /{slug}` | RSS feed for a podcast |
 | `GET /{slug}/{episode_id}` | Episode audio file |
-| `GET /health` | Unauthenticated health check (JSON), 200 or 503 |
+| `GET /health` | Unauthenticated liveness check (JSON), always 200 while the process answers |
+| `GET /status` | Unauthenticated deep check (JSON), 200 or 503, cached for 60 s |
 
 **With `secret`:** append `?secret=<value>` to all requests.
 
@@ -171,7 +172,11 @@ https://podimo.com/shows/abc12345-1234-1234-1234-abcdef123456
 
 #### Health check
 
-`GET /health` needs no secret and is meant for monitoring tools such as Uptime Kuma. It returns `200` with `{"status": "ok", ...}` when the server is up, every podcast has its feed file(s), and the last full `podimo harvest` finished within `api.health_max_harvest_age` seconds (default 8 hours, i.e. two missed 4-hourly cron runs) without a persistent failure. Otherwise it returns `503` with the reasons listed in `problems`. A podcast that fails is retried once during the harvest (after `api.harvest_retry_delay` seconds); if it still fails, but did not fail in the previous full harvest, `/health` stays `200` and lists it under `warnings`. A podcast that fails in two full harvests in a row gives `503`. The response also carries `last_harvest`, `last_harvest_age_seconds` and `last_harvest_duration_seconds`, and never includes secrets.
+`GET /health` is the liveness check for the Docker healthcheck and monitoring (InfraDash, Uptime Kuma). It needs no secret, does no file I/O and has no dependencies, so it returns `200` with `{"status": "ok", "version": ..., "uptime_seconds": ...}` as long as the process answers, also when the share with `yield_dir` is slow or missing.
+
+`GET /status` is the deep check, also without a secret. It returns `200` with `{"status": "ok", ...}` when every podcast has its feed file(s) and the last full `podimo harvest` finished within `api.health_max_harvest_age` seconds (default 8 hours, i.e. two missed 4-hourly cron runs) without a persistent failure. Otherwise it returns `503` with the reasons listed in `problems`. A podcast that fails is retried once during the harvest (after `api.harvest_retry_delay` seconds); if it still fails, but did not fail in the previous full harvest, `/status` stays `200` and lists it under `warnings`. A podcast that fails in two full harvests in a row gives `503`. The response also carries `last_harvest`, `last_harvest_age_seconds` and `last_harvest_duration_seconds`, and never includes secrets. The file lookups run in a thread, the result is cached for 60 seconds, and a lookup that takes more than 10 seconds gives `503` instead of hanging.
+
+`podimo serve` passes extra options to uvicorn, including `--workers N`. Each worker reads the same config file (through `PODIMO_CONFIG_FILE`, which `serve` sets), and secrets are redacted from the access log in every worker.
 
 The harvest status is written to `<yield_dir>/.harvest-status.json` at the end of every full harvest (runs limited to specific slugs do not update it).
 

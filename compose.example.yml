@@ -12,7 +12,7 @@ services:
       - /path/to/crontab:/etc/cron.d/podimo-crontab:ro
       - /path/to/podcast/files:/app/yield
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8000/openapi.json || exit 1"]
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3
