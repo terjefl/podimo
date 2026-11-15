@@ -11,6 +11,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
 from .config import Config, User
 from .main import (
+    as_int,
     build_podcast_feed_path,
     build_podcast_episode_file_path,
     get_secret_query_parameter,
@@ -175,13 +176,6 @@ function toggleDesc(uid) {{
     return HTMLResponse(content=page)
 
 
-def _as_int(value, default: int) -> int:
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return default
-
-
 @api.get("/health")
 async def get_health(config: Config = Depends(api_config)):
     """
@@ -218,7 +212,7 @@ async def get_health(config: Config = Depends(api_config)):
         if isinstance(streak, dict):
             # A podcast that failed only in the last run is most likely a transient
             # network error: report it as a warning. Two runs in a row is a real fault.
-            persistent = [s for s in failed if _as_int(streak.get(s), default=2) >= 2]
+            persistent = [s for s in failed if as_int(streak.get(s), default=2) >= 2]
             warnings = [f"podcast failed in last harvest only: {s}" for s in failed if s not in persistent]
         else:
             # Status file written before streaks were recorded: keep the old behaviour.

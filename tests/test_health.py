@@ -122,6 +122,25 @@ def test_garbage_streak_values_do_not_crash(config, health):
     assert health().status_code == 503  # unreadable streak counts as persistent
 
 
+def test_slug_missing_from_streak_counts_as_persistent(config, health):
+    full_run(config, ["alpha"])
+    path = harvest_status_path(config)
+    status = json.loads(path.read_text())
+    status["failed_streak"] = {}
+    path.write_text(json.dumps(status))
+    assert health().status_code == 503
+
+
+def test_garbage_previous_streak_does_not_stop_status_write(config, health):
+    full_run(config, ["alpha"])
+    path = harvest_status_path(config)
+    status = json.loads(path.read_text())
+    status["failed_streak"] = {"alpha": "nonsense"}
+    path.write_text(json.dumps(status))
+    full_run(config, ["alpha", "beta"])  # must not raise
+    assert json.loads(path.read_text())["failed_streak"] == {"alpha": 2, "beta": 1}
+
+
 # --- Retry in the harvest loop ---
 
 def run_harvest(config, tmp_path, monkeypatch, behaviour):

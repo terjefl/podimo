@@ -77,6 +77,14 @@ def harvest_status_path(config: Config) -> Path:
     return Path(config.yield_dir) / ".harvest-status.json"
 
 
+def as_int(value, default: int) -> int:
+    """int(value), or default for anything that is not a number (hand-edited or corrupt status file)."""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def write_harvest_status(config: Config, started: datetime, failed: list[str], error: Optional[str] = None):
     """
     Record the outcome of a full harvest for GET /health.
@@ -92,7 +100,7 @@ def write_harvest_status(config: Config, started: datetime, failed: list[str], e
         # Status file from before streaks were recorded: its failures count as one run.
         previous_streak = {slug: 1 for slug in previous_failed}
     failed_streak = {
-        slug: (int(previous_streak.get(slug, 1)) + 1 if slug in previous_failed else 1)
+        slug: (as_int(previous_streak.get(slug, 1), default=1) + 1 if slug in previous_failed else 1)
         for slug in failed
     }
     finished = datetime.now(timezone.utc)
