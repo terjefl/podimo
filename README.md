@@ -23,9 +23,9 @@ services:
       - "8200:8000"
     environment:
       - TZ=Europe/Oslo
+      - PODIMO_MODE=web
     volumes:
       - /path/to/config.yaml:/app/config.yaml:ro
-      - /path/to/crontab:/etc/cron.d/podimo-crontab:ro
       - /path/to/podcast/files:/app/yield
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
@@ -33,12 +33,32 @@ services:
       timeout: 5s
       retries: 3
       start_period: 15s
+
+  podimo-harvest:
+    image: ghcr.io/terjefl/podimo:latest
+    container_name: podimo-harvest
+    restart: unless-stopped
+    environment:
+      - TZ=Europe/Oslo
+      - PODIMO_MODE=harvest
+    volumes:
+      - /path/to/config.yaml:/app/config.yaml:ro
+      - /path/to/crontab:/etc/cron.d/podimo-crontab:ro
+      - /path/to/podcast/files:/app/yield
+      - /path/on/local/disk/podimo-staging:/app/staging
 ```
 
-The crontab controls when harvesting runs. It is installed with `crontab` inside the container, so use the user-crontab format (no user column). Example:
+The image runs in one of two modes, selected with `PODIMO_MODE`:
+
+- `web` (default): only the HTTP server. No crontab and no cron daemon.
+- `harvest`: only cron with the mounted crontab, no server.
+
+Run them as two containers from the same image, as above, so the bulk writes of a harvest to the share do not share a process, cgroup or I/O queue with the server. Downloads go to `STAGING_DIR` (default `/app/staging`; bind-mount local disk there) and are then copied to `yield_dir` as `<name>.part`, fsynced and renamed to the final name, so clients never see a half-written file on the share. Staging files and `.part` files older than an hour are removed when a harvest starts.
+
+The crontab controls when harvesting runs. It is installed with `crontab` inside the harvest container, so use the user-crontab format (no user column). Avoid starting on the hour, when other jobs (e.g. Plex analysis) often read the same share. Example:
 
 ```cron
-0 */4 * * * podimo harvest >> /var/log/podimo.log 2>&1
+17 */4 * * *   /usr/local/bin/podimo harvest    >> /var/log/podimo.log 2>&1
 ```
 
 The image sets `PODIMO_CONFIG_FILE=/app/config.yaml`, so `podimo` finds the config regardless of the working directory cron starts from. Outside Docker, either run from the directory containing `config.yaml`, pass `--config-file`, or set `PODIMO_CONFIG_FILE`.

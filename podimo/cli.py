@@ -14,7 +14,7 @@ from . import api
 from .api import api as api_app, api_config
 from .async_cli import AsyncTyper
 from .config import config_from_stream
-from .main import get_podimo_client, harvest_podcast, log, sync_slug_feed, write_harvest_status
+from .main import clean_staging, get_podimo_client, harvest_podcast, log, sync_slug_feed, write_harvest_status
 
 DEFAULT_CONFIG_FILE = os.environ.get("PODIMO_CONFIG_FILE", "config.yaml")
 
@@ -54,6 +54,7 @@ async def harvest(
         raise typer.Exit(code=0)
 
     log("[INFO] Harvest started")
+    clean_staging()
     started = datetime.now(timezone.utc)
     failed = []
     try:
