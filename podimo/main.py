@@ -78,12 +78,31 @@ def harvest_status_path(config: Config) -> Path:
 
 
 def write_harvest_status(config: Config, started: datetime, failed: list[str], error: Optional[str] = None):
+    """
+    Record the outcome of a full harvest for GET /health.
+
+    ``failed_streak`` counts, per failed podcast, how many full harvests in a row it
+    has failed: a slug that also failed in the previous run gets that run's streak + 1,
+    otherwise 1. /health only reports a podcast as down from a streak of 2.
+    """
+    previous = read_harvest_status(config) or {}
+    previous_failed = previous.get("failed") or []
+    previous_streak = previous.get("failed_streak")
+    if not isinstance(previous_streak, dict):
+        # Status file from before streaks were recorded: its failures count as one run.
+        previous_streak = {slug: 1 for slug in previous_failed}
+    failed_streak = {
+        slug: (int(previous_streak.get(slug, 1)) + 1 if slug in previous_failed else 1)
+        for slug in failed
+    }
     finished = datetime.now(timezone.utc)
     status = {
         "started": started.isoformat(timespec="seconds"),
         "finished": finished.isoformat(timespec="seconds"),
         "duration_seconds": int((finished - started).total_seconds()),
         "failed": failed,
+        "failed_streak": failed_streak,
+        "previous_failed": previous_failed,
         "error": error,
     }
     path = harvest_status_path(config)

@@ -65,8 +65,16 @@ async def harvest(
                 try:
                     await harvest_podcast(client, config, slug)
                 except Exception as exc:
-                    log(f"[FAIL] Harvest of '{slug}' failed: {exc}")
-                    failed.append(slug)
+                    # One retry absorbs transient network errors (dropped connection,
+                    # DNS blip). harvest_podcast is idempotent, so nothing is fetched twice.
+                    delay = config.api.harvest_retry_delay
+                    log(f"[WARN] Retrying '{slug}' in {delay}s after: {exc}")
+                    await asyncio.sleep(delay)
+                    try:
+                        await harvest_podcast(client, config, slug)
+                    except Exception as exc:
+                        log(f"[FAIL] Harvest of '{slug}' failed: {exc}")
+                        failed.append(slug)
                 if i < len(slugs) - 1:
                     await asyncio.sleep(config.api.inter_podcast_delay)
     except Exception as exc:

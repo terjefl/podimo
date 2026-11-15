@@ -175,16 +175,27 @@ function toggleDesc(uid) {{
     return HTMLResponse(content=page)
 
 
+def _as_int(value, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
 @api.get("/health")
 async def get_health(config: Config = Depends(api_config)):
     """
     Unauthenticated health check for monitoring (e.g. Uptime Kuma).
 
     Returns 200 when the server is up, every configured podcast has a feed file
-    and the last full harvest finished recently without failures; otherwise 503
-    with the reason in the body. Never includes secrets or episode data.
+    and the last full harvest finished recently without persistent failures;
+    otherwise 503 with the reason in the body. A podcast that failed only in the
+    last full harvest is listed under "warnings" and does not cause a 503; one
+    that failed in two full harvests in a row does. Never includes secrets or
+    episode data, and makes no external calls.
     """
     problems = []
+    warnings = []
     now = datetime.now(timezone.utc)
 
     status = read_harvest_status(config)
@@ -202,8 +213,18 @@ async def get_health(config: Config = Depends(api_config)):
             problems.append("harvest status file is unreadable")
         if status.get("error"):
             problems.append(f"last harvest aborted: {status['error']}")
-        if status.get("failed"):
-            problems.append(f"podcasts failed in last harvest: {', '.join(status['failed'])}")
+        failed = status.get("failed") or []
+        streak = status.get("failed_streak")
+        if isinstance(streak, dict):
+            # A podcast that failed only in the last run is most likely a transient
+            # network error: report it as a warning. Two runs in a row is a real fault.
+            persistent = [s for s in failed if _as_int(streak.get(s), default=2) >= 2]
+            warnings = [f"podcast failed in last harvest only: {s}" for s in failed if s not in persistent]
+        else:
+            # Status file written before streaks were recorded: keep the old behaviour.
+            persistent = failed
+        if persistent:
+            problems.append(f"podcasts failed in last harvest: {', '.join(persistent)}")
 
     aliases = [u.alias for u in config.users] or [None]
     missing_feeds = [
@@ -221,6 +242,7 @@ async def get_health(config: Config = Depends(api_config)):
         "last_harvest": status["finished"] if status and "finished" in status else None,
         "last_harvest_age_seconds": harvest_age,
         "last_harvest_duration_seconds": status.get("duration_seconds") if status else None,
+        "warnings": warnings,
     }
     return JSONResponse(body, status_code=200 if not problems else 503)
 

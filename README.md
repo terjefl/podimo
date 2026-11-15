@@ -126,6 +126,7 @@ api:
   max_concurrent_downloads: 3   # Max simultaneous episode downloads (default: 3)
   token_cache_time: 432000      # Auth token lifetime in seconds (default: 5 days)
   inter_podcast_delay: 10       # Seconds to wait between podcasts during harvest (default: 10)
+  harvest_retry_delay: 30       # Seconds before the one retry of a podcast whose harvest failed (default: 30)
   mp3_bitrate: "128k"           # MP3 bitrate used when transcoding HLS streams (default: 128k)
   health_max_harvest_age: 28800 # /health returns 503 if the last harvest is older than this, in seconds (default: 8h)
 ```
@@ -170,7 +171,7 @@ https://podimo.com/shows/abc12345-1234-1234-1234-abcdef123456
 
 #### Health check
 
-`GET /health` needs no secret and is meant for monitoring tools such as Uptime Kuma. It returns `200` with `{"status": "ok", ...}` when the server is up, every podcast has its feed file(s), and the last full `podimo harvest` finished within `api.health_max_harvest_age` seconds (default 8 hours, i.e. two missed 4-hourly cron runs) without any failed podcast. Otherwise it returns `503` with the reasons listed in `problems`. The response also carries `last_harvest`, `last_harvest_age_seconds` and `last_harvest_duration_seconds`, and never includes secrets.
+`GET /health` needs no secret and is meant for monitoring tools such as Uptime Kuma. It returns `200` with `{"status": "ok", ...}` when the server is up, every podcast has its feed file(s), and the last full `podimo harvest` finished within `api.health_max_harvest_age` seconds (default 8 hours, i.e. two missed 4-hourly cron runs) without a persistent failure. Otherwise it returns `503` with the reasons listed in `problems`. A podcast that fails is retried once during the harvest (after `api.harvest_retry_delay` seconds); if it still fails, but did not fail in the previous full harvest, `/health` stays `200` and lists it under `warnings`. A podcast that fails in two full harvests in a row gives `503`. The response also carries `last_harvest`, `last_harvest_age_seconds` and `last_harvest_duration_seconds`, and never includes secrets.
 
 The harvest status is written to `<yield_dir>/.harvest-status.json` at the end of every full harvest (runs limited to specific slugs do not update it).
 
