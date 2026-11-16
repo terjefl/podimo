@@ -1,8 +1,10 @@
 import asyncio
 import contextlib
 import json
+import os
 import shutil
 import subprocess
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from time import time
@@ -77,18 +79,43 @@ def harvest_status_path(config: Config) -> Path:
     return Path(config.yield_dir) / ".harvest-status.json"
 
 
+def as_int(value, default: int) -> int:
+    """int(value), or default for anything that is not a number (hand-edited or corrupt status file)."""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def write_harvest_status(config: Config, started: datetime, failed: list[str], error: Optional[str] = None):
+    """
+    Record the outcome of a full harvest for GET /health.
+
+    ``failed_streak`` counts, per failed podcast, how many full harvests in a row it
+    has failed: a slug that also failed in the previous run gets that run's streak + 1,
+    otherwise 1. /health only reports a podcast as down from a streak of 2.
+    """
+    previous = read_harvest_status(config) or {}
+    previous_failed = previous.get("failed") or []
+    previous_streak = previous.get("failed_streak")
+    if not isinstance(previous_streak, dict):
+        # Status file from before streaks were recorded: its failures count as one run.
+        previous_streak = {slug: 1 for slug in previous_failed}
+    failed_streak = {
+        slug: (as_int(previous_streak.get(slug, 1), default=1) + 1 if slug in previous_failed else 1)
+        for slug in failed
+    }
     finished = datetime.now(timezone.utc)
     status = {
         "started": started.isoformat(timespec="seconds"),
         "finished": finished.isoformat(timespec="seconds"),
         "duration_seconds": int((finished - started).total_seconds()),
         "failed": failed,
+        "failed_streak": failed_streak,
+        "previous_failed": previous_failed,
         "error": error,
     }
-    path = harvest_status_path(config)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(status, indent=2))
+    write_text_atomic(harvest_status_path(config), json.dumps(status, indent=2))
 
 
 def read_harvest_status(config: Config) -> Optional[dict]:
@@ -149,6 +176,109 @@ def is_hls_url(url: str) -> bool:
     return url.split("?", 1)[0].lower().endswith(".m3u8")
 
 
+# --- Staging and atomic publishing ---
+#
+# Downloads are written to a local staging directory first and only then copied to
+# yield_dir (usually a CIFS/SMB share): copy to <name>.part, fsync, os.replace to the
+# final name. Clients never see a half-written file on the share, and the share gets
+# short bursts instead of a long, live write stream.
+
+STAGING_ENV = "STAGING_DIR"
+DEFAULT_STAGING_DIR = "/app/staging"  # bind-mounted from local disk in Docker
+STALE_AGE_S = 3600  # staging/.part files older than this are left over from a crashed run
+
+
+def staging_dir() -> Path:
+    """The local staging directory; falls back to the temp dir outside Docker."""
+    for candidate in (os.environ.get(STAGING_ENV), DEFAULT_STAGING_DIR):
+        if not candidate:
+            continue
+        path = Path(candidate)
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+            return path
+        except OSError:
+            continue
+    path = Path(tempfile.gettempdir()) / "podimo-staging"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def staging_path_for(final: Path) -> Path:
+    """Where a download for `final` is written before it is published."""
+    return staging_dir() / f"{final.parent.name}__{final.name}"
+
+
+def _fsync_dir(path: Path):
+    try:
+        fd = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass  # not supported on every file system (e.g. some CIFS mounts)
+    finally:
+        os.close(fd)
+
+
+def publish_file(src: Path, final: Path, move: bool = True):
+    """Copy `src` to `final` atomically: <final>.part, fsync, os.replace. Removes `src` when `move`."""
+    final.parent.mkdir(parents=True, exist_ok=True)
+    part = final.with_name(final.name + ".part")
+    try:
+        with src.open("rb") as fin, part.open("wb") as fout:
+            shutil.copyfileobj(fin, fout, 1024 * 1024)
+            fout.flush()
+            os.fsync(fout.fileno())
+        os.replace(part, final)
+    except BaseException:
+        part.unlink(missing_ok=True)
+        raise
+    _fsync_dir(final.parent)
+    if move:
+        src.unlink(missing_ok=True)
+
+
+def write_text_atomic(final: Path, text: str):
+    """Write a small text file (feed, status) so readers see either the old or the new version."""
+    final.parent.mkdir(parents=True, exist_ok=True)
+    part = final.with_name(final.name + ".part")
+    try:
+        with part.open("w", encoding="utf-8") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(part, final)
+    except BaseException:
+        part.unlink(missing_ok=True)
+        raise
+
+
+def remove_stale(directory: Path, pattern: str, max_age_s: int = STALE_AGE_S) -> list[Path]:
+    """Delete files matching `pattern` older than `max_age_s` (newer ones may belong to a running harvest)."""
+    removed = []
+    cutoff = time() - max_age_s
+    try:
+        candidates = list(directory.glob(pattern))
+    except OSError:
+        return removed
+    for f in candidates:
+        try:
+            if f.is_file() and f.stat().st_mtime < cutoff:
+                f.unlink()
+                removed.append(f)
+        except OSError:
+            continue
+    return removed
+
+
+def clean_staging():
+    """Remove downloads left in the staging directory by a crashed harvest."""
+    for f in remove_stale(staging_dir(), "*"):
+        log(f"[INFO] Removed stale staging file: {f.name}")
+
+
 # --- Download ---
 
 def _download_hls_sync(url: str, interim: Path, bitrate: str):
@@ -168,16 +298,22 @@ def _download_hls_sync(url: str, interim: Path, bitrate: str):
 
 
 def _download_file_sync(scraper, url: str, path: Path, mp3_bitrate: str = "128k"):
-    interim = path.with_name(path.stem + "_interim.mp3")
-    if is_hls_url(url):
-        _download_hls_sync(url, interim, mp3_bitrate)
-    else:
-        with scraper.get(url, stream=True, timeout=(10, 60)) as response:
-            response.raise_for_status()
-            with interim.open("wb") as f:
-                for chunk in response.iter_content(65536):
-                    f.write(chunk)
-    interim.rename(path)
+    # download to local staging, then publish to the share in one short, atomic copy
+    staged = staging_path_for(path)
+    staged.unlink(missing_ok=True)
+    try:
+        if is_hls_url(url):
+            _download_hls_sync(url, staged, mp3_bitrate)
+        else:
+            with scraper.get(url, stream=True, timeout=(10, 60)) as response:
+                response.raise_for_status()
+                with staged.open("wb") as f:
+                    for chunk in response.iter_content(65536):
+                        f.write(chunk)
+        publish_file(staged, path)
+    except BaseException:
+        staged.unlink(missing_ok=True)
+        raise
     log(f"[INFO] Downloaded {path.name}")
 
 
@@ -280,8 +416,7 @@ async def sync_slug_feed(client: PodimoClient, config: Config, slug: str):
                 unavailable_ids=unavailable_ids,
                 secret=user.secret,
             )
-            with build_podcast_feed_path(config, slug, alias=user.alias).open("w", encoding="utf-8") as f:
-                f.write(feed)
+            write_text_atomic(build_podcast_feed_path(config, slug, alias=user.alias), feed)
         log(
             f"[INFO] '{slug}' feed written for {len(config.users)} user{'s' if len(config.users) != 1 else ''}"
             f" ({len(episodes)} episode{'s' if len(episodes) != 1 else ''})"
@@ -291,8 +426,7 @@ async def sync_slug_feed(client: PodimoClient, config: Config, slug: str):
             config, episodes, slug, title, description, image_url,
             unavailable_ids=unavailable_ids,
         )
-        with build_podcast_feed_path(config, slug).open("w", encoding="utf-8") as f:
-            f.write(feed)
+        write_text_atomic(build_podcast_feed_path(config, slug), feed)
         log(f"[INFO] '{slug}' feed now serving {len(episodes)} episode{'s' if len(episodes) != 1 else ''}")
 
 
@@ -340,9 +474,12 @@ async def harvest_podcast(client: PodimoClient, config: Config, slug: str):
     podcast_dir = build_podcast_dir(config, slug)
     podcast_dir.mkdir(parents=True, exist_ok=True)
 
+    # left over from before staging existed, or from a publish that was interrupted
     for f in podcast_dir.glob("*_interim.mp3"):
         log(f"[INFO] Removing stale interim file: {f.name}")
         f.unlink()
+    for f in remove_stale(podcast_dir, "*.part"):
+        log(f"[INFO] Removed stale partial file: {f.name}")
 
     placeholder = Path(__file__).parent.parent / "episode_not_available.mp3"
     sem = asyncio.Semaphore(config.api.max_concurrent_downloads)
@@ -355,13 +492,10 @@ async def harvest_podcast(client: PodimoClient, config: Config, slug: str):
                 await async_wrap(_download_file_sync)(client.scraper, url, path, config.api.mp3_bitrate)
             except Exception as exc:
                 log(f"[WARN] Download failed for {episode_id}: {exc}")
-                interim = path.with_name(path.stem + "_interim.mp3")
-                if interim.exists():
-                    interim.unlink()
                 if path.exists():
                     path.unlink()
                 if placeholder.exists():
-                    shutil.copy2(placeholder, path)
+                    publish_file(placeholder, path, move=False)
                     path.with_suffix(".unavailable").touch()
                     log(f"[INFO] Placed unavailable-episode placeholder at {path.name}")
 

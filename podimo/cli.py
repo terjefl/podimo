@@ -1,6 +1,5 @@
 import fcntl
 import hashlib
-import logging
 import os
 import pprint
 import tempfile
@@ -15,8 +14,7 @@ from . import api
 from .api import api as api_app, api_config
 from .async_cli import AsyncTyper
 from .config import config_from_stream
-from .logging_utils import LogRedactSecretFilter
-from .main import get_podimo_client, harvest_podcast, log, sync_slug_feed, write_harvest_status
+from .main import clean_staging, get_podimo_client, harvest_podcast, log, sync_slug_feed, write_harvest_status
 
 DEFAULT_CONFIG_FILE = os.environ.get("PODIMO_CONFIG_FILE", "config.yaml")
 
@@ -56,6 +54,7 @@ async def harvest(
         raise typer.Exit(code=0)
 
     log("[INFO] Harvest started")
+    clean_staging()
     started = datetime.now(timezone.utc)
     failed = []
     try:
@@ -65,8 +64,16 @@ async def harvest(
                 try:
                     await harvest_podcast(client, config, slug)
                 except Exception as exc:
-                    log(f"[FAIL] Harvest of '{slug}' failed: {exc}")
-                    failed.append(slug)
+                    # One retry absorbs transient network errors (dropped connection,
+                    # DNS blip). harvest_podcast is idempotent, so nothing is fetched twice.
+                    delay = config.api.harvest_retry_delay
+                    log(f"[WARN] Retrying '{slug}' in {delay}s after: {exc}")
+                    await asyncio.sleep(delay)
+                    try:
+                        await harvest_podcast(client, config, slug)
+                    except Exception as exc:
+                        log(f"[FAIL] Harvest of '{slug}' failed: {exc}")
+                        failed.append(slug)
                 if i < len(slugs) - 1:
                     await asyncio.sleep(config.api.inter_podcast_delay)
     except Exception as exc:
@@ -126,16 +133,13 @@ def serve_api(
     ctx.args.insert(0, f"{api.__name__}:api")
     config = config_from_stream(config_stream)
     api_app.dependency_overrides[api_config] = lambda: config
-
-    secrets_to_redact = []
-    if config.secret is not None:
-        secrets_to_redact.append(config.secret)
-    if config.users:
-        secrets_to_redact.extend(u.secret for u in config.users)
-    if secrets_to_redact:
-        secret_filter = LogRedactSecretFilter(secrets_to_redact)
-        logging.getLogger("uvicorn.access").addFilter(secret_filter)
-        logging.getLogger("uvicorn.error").addFilter(secret_filter)
+    # Workers started with --workers N are new processes without the override above;
+    # they read the same file through PODIMO_CONFIG_FILE (see api.api_config).
+    config_path = getattr(config_stream, "name", None)
+    if isinstance(config_path, str) and os.path.isfile(config_path):
+        os.environ[api.CONFIG_ENV] = os.path.abspath(config_path)
+    # also installed on startup in every worker (api._startup)
+    api.install_secret_filter(config)
 
     uvicorn.main.main(args=ctx.args)
 
