@@ -138,6 +138,12 @@ def serve_api(
     config_path = getattr(config_stream, "name", None)
     if isinstance(config_path, str) and os.path.isfile(config_path):
         os.environ[api.CONFIG_ENV] = os.path.abspath(config_path)
+    elif workers_requested(ctx.args) > 1:
+        # stdin or a path that is not a regular file: the workers could not load it and
+        # every request would fail with 500
+        raise typer.BadParameter(
+            "--workers > 1 needs the configuration in a file (not stdin)", param_hint="--config-file"
+        )
     # also installed on startup in every worker (api._startup)
     api.install_secret_filter(config)
 
@@ -162,3 +168,19 @@ def callback():
     """
     Download Podimo podcast episodes and serve them as RSS feeds
     """
+
+
+def workers_requested(args: list[str]) -> int:
+    """The value of uvicorn's --workers in the extra args (1 when not given or not a number)."""
+    for i, a in enumerate(args):
+        value = None
+        if a == "--workers" and i + 1 < len(args):
+            value = args[i + 1]
+        elif a.startswith("--workers="):
+            value = a.split("=", 1)[1]
+        if value is not None:
+            try:
+                return int(value)
+            except ValueError:
+                return 1
+    return 1

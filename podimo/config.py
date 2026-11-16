@@ -28,7 +28,7 @@ class ApiConfig:
     inter_podcast_delay: int = 10  # seconds between podcast fetches
     harvest_retry_delay: int = 30  # seconds before retrying a podcast whose harvest failed (one retry)
     mp3_bitrate: str = "128k"  # MP3 bitrate when transcoding HLS streams with ffmpeg
-    health_max_harvest_age: int = 28800  # /health reports 503 if the last harvest is older than this (8h)
+    health_max_harvest_age: int = 28800  # /status reports 503 if the last harvest is older than this (8h)
 
 
 @dataclass
